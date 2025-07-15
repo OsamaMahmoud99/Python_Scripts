@@ -1,0 +1,71 @@
+/*@!Encoding:1252*/
+/* CanSnifferUdp_2Buses.can     compile-clean version */
+ 
+variables
+{
+  long gSock = -1;
+  long UdspSend_return;
+  dword ip;
+}
+ 
+/* open UDP socket once */
+on start
+{                         /* declare first          */
+  ip = IpGetAddressAsNumber("192.168.56.101");   /* then assign     */
+ 
+  gSock = UdpOpen(0,0);       /* ? 192.168.56.101:17000      */
+}
+ 
+ 
+/* helper to convert a nybble to an ASCII hex digit */
+byte nybble2hex(byte n)
+{
+  return (n < 10) ? ('0' + n) : ('A' + (n - 10));
+}
+ 
+/* ---------------- CAN-BUS 1 ---------------------------------- */
+on message CAN1.*
+{
+  char line[128];
+  long len;
+  byte i, b;
+ 
+  /* prefix: CAN1,<time>,<id>,<dlc>, */
+  len = snprintf(line, elcount(line),
+                 "CAN1,%u,%08X,%d,", this.time, this.id, this.dlc);
+ 
+  /* payload bytes   two ASCII hex chars per byte */
+  for (i = 0; i < this.dlc; i++)
+  {
+    b = this.byte(i);
+    line[len++] = nybble2hex(b >> 4);
+    line[len++] = nybble2hex(b & 0x0F);
+  }
+ 
+  line[len++] = '\n';            /* add newline        */
+  UdspSend_return = UdpSendTo(gSock, ip, 17000, line, len);     /* fire-and-forget    */
+  //write("%d", UdspSend_return);
+  //write("CAN1 saw 0x%08X", this.id);
+}
+ 
+/* ---------------- CAN-BUS 2 ---------------------------------- */
+on message CAN2.*
+{
+  char line[128];
+  long len;
+  byte i, b;
+ 
+  len = snprintf(line, elcount(line),
+                 "CAN2,%u,%08X,%d,", this.time, this.id, this.dlc);
+ 
+  for (i = 0; i < this.dlc; i++)
+  {
+    b = this.byte(i);
+    line[len++] = nybble2hex(b >> 4);
+    line[len++] = nybble2hex(b & 0x0F);
+  }
+ 
+  line[len++] = '\n';
+  UdpSendTo(gSock, ip, 17000, line, len);
+  //write("CAN2 saw 0x%08X", this.id);
+}

@@ -1,0 +1,133 @@
+/*@!Encoding:1252*/
+/*@!Encoding:1252*/
+ 
+variables
+{
+  UdpSocket gSocket;
+  char gRxBuffer[1024];
+  char bus[10], can_id_hex[10], dlc_str[10], data_hex[64];
+  long canid;
+  char tmpstr[256];
+  byte data[8];
+  message *msg;
+  IP_Endpoint 0.0.0.0:18000 listenEp;
+  long dlc, i, Frame_start, Frame_end, field;
+  long timestamp;
+  long tmp;
+}
+ 
+on start
+{
+  gSocket = UdpSocket::Open(listenEp);
+  if (gSocket) {
+    write("[INFO] UdpSocket opened on port 18000");
+    gSocket.ReceiveFrom(gRxBuffer, elcount(gRxBuffer));
+  } else {
+    write("[ERROR] UdpSocket::Open failed!");
+    return;
+  }
+}
+ 
+on stopMeasurement
+{
+  if (gSocket)
+  {
+    gSocket.Close();
+    write("[INFO] UdpSocket closed.");
+  }
+}
+ 
+OnUdpReceiveFrom(UdpSocket socket, long result, IP_Endpoint remoteEndpoint, char buffer[], dword size)
+{
+  int len;
+  char can_id_hex_full[12];
+  int j;
+  char increment_type[16];
+  long freshness_flag = 0;
+  long byte_index = -1;
+  int msgChannel = 0;
+  if (result == 0) // Success
+  {
+    write("[UDP] Received from port: %d, data: %s", remoteEndpoint.PortNumber, buffer);
+    // Manual CSV parsing
+    Frame_start = 0;
+    field = 0;
+    for (Frame_end = 0; Frame_end < size && buffer[Frame_end] != 0; Frame_end++) {
+      if (buffer[Frame_end] == ',') {
+        len = Frame_end - Frame_start;
+        switch (field) {
+          case 0: for (j = 0; j < len; j++) bus[j] = buffer[Frame_start + j]; bus[len] = 0; break;
+          case 1: for (j = 0; j < len; j++) tmpstr[j] = buffer[Frame_start + j]; tmpstr[len] = 0; strtol(tmpstr, timestamp); break;
+          case 2: for (j = 0; j < len; j++) can_id_hex[j] = buffer[Frame_start + j]; can_id_hex[len] = 0; break;
+          case 3: for (j = 0; j < len; j++) tmpstr[j] = buffer[Frame_start + j]; tmpstr[len] = 0; strtol(tmpstr, dlc); break;
+          case 4: for (j = 0; j < len; j++) data_hex[j] = buffer[Frame_start + j]; data_hex[len] = 0; break;
+          case 5: for (j = 0; j < len; j++) tmpstr[j] = buffer[Frame_start + j]; tmpstr[len] = 0; strtol(tmpstr, freshness_flag); break;
+          case 6: for (j = 0; j < len; j++) increment_type[j] = buffer[Frame_start + j]; increment_type[len] = 0; break;
+          case 7: for (j = 0; j < len; j++) tmpstr[j] = buffer[Frame_start + j]; tmpstr[len] = 0; strtol(tmpstr, byte_index); break;
+        }
+        field++;
+        Frame_start = Frame_end + 1;
+        if (field == 8) {
+          Frame_end = strlen(buffer);
+          break;
+        }
+      }
+    }
+    // After loop: handle last field if still missing (field == 4 means it's data_hex)
+  if (field == 4) {
+    len = Frame_end - Frame_start;
+    for (j = 0; j < len; j++) data_hex[j] = buffer[Frame_start + j];
+    data_hex[len] = 0;
+  }
+    // After the loop, handle the last field (byte_index)
+    if (field == 7) {
+      len = Frame_end - Frame_start;
+      for (j = 0; j < len; j++) tmpstr[j] = buffer[Frame_start + j];
+      tmpstr[len] = 0;
+      strtol(tmpstr, byte_index);
+    }
+    write("[DEBUG] Parsed bus: %s", bus);
+    write("[DEBUG] Parsed timestamp: %ld", timestamp);
+    write("[DEBUG] Parsed CAN ID: %s (hex)", can_id_hex);
+    write("[DEBUG] Parsed DLC: %ld", dlc);
+    write("[DEBUG] Parsed data_hex: %s", data_hex);
+    // Convert CAN ID from hex string to number
+    snprintf(can_id_hex_full, elcount(can_id_hex_full), "0x%s", can_id_hex);
+    strtol(can_id_hex_full, canid);
+    write("[DEBUG] CAN ID (numeric): 0x%X", canid);
+    // Convert data_hex to byte array
+    for (i = 0; i < dlc && i < 8; i++) {
+      snprintf(tmpstr, elcount(tmpstr), "0x%c%c", data_hex[2*i], data_hex[2*i+1]);
+      strtol(tmpstr, tmp);
+      data[i] = (byte)tmp;
+      write("[DEBUG] data[%ld]=0x%02X", i, data[i]);
+    }
+    // Determine channel
+    if (bus[0] == 'C' && bus[1] == 'A' && bus[2] == 'N' && bus[3] == '1' && bus[4] == 0) {
+      msgChannel = 1;
+    } else if (bus[0] == 'C' && bus[1] == 'A' && bus[2] == 'N' && bus[3] == '2' && bus[4] == 0) {
+      msgChannel = 2;
+    } else {
+      write("[ERROR] Unknown bus: %s", bus);
+      return;
+    }
+    write("[INFO] About to send frame on bus: %s, ID: 0x%X, DLC: %ld", bus, canid, dlc);
+ 
+    sendFrame(canid, dlc, data, msgChannel);
+    }
+  else
+  {
+    write("[ERROR] UDP receive failed! Result code: %d", result);
+  }
+  // Always call ReceiveFrom again to keep receiving
+  socket.ReceiveFrom(gRxBuffer, elcount(gRxBuffer));
+}
+ 
+void sendFrame(long id, int dlc, byte data[], int msgChannel) {
+  int i;
+  msg.id = id;
+  msg.dlc = dlc;
+  for(i=0; i<dlc; i++) msg.byte(i) = data[i];
+  msg.msgChannel = msgChannel;
+  output(msg);
+}
