@@ -1,0 +1,1 @@
+Python312\python.exe test_run.py

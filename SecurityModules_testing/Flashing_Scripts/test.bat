@@ -1,0 +1,3 @@
+echo helloooooooooooooo
+
+pause
